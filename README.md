@@ -39,7 +39,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: nikrun/github-setup-nik@v1
 
@@ -53,7 +53,7 @@ Because `nik build` automatically downloads and SHA-256-verifies both the Free P
 Combine `nikrun/github-setup-nik` with [`actions/cache`](https://github.com/actions/cache) to persist `~/.nikrun/sdks` and `~/.nikrun/cache/pkg` across workflow runs:
 
 ```yaml
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: nikrun/github-setup-nik@v1
 
