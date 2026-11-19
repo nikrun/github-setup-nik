@@ -1,0 +1,79 @@
+name: Test Action
+
+on:
+  push:
+    branches: [ main, dev, 'feature/**' ]
+  pull_request:
+    branches: [ main, dev ]
+  workflow_dispatch:
+
+concurrency:
+  group: test-action-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test Setup (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-24.04
+          - ubuntu-24.04-arm
+          - macos-15-intel
+          - macos-latest
+          - windows-latest
+          - windows-11-arm
+
+    steps:
+      - name: Checkout Action
+        uses: actions/checkout@v4
+
+      - name: Setup Nikrun CLI (Default Stable Channel)
+        id: setup
+        uses: ./
+
+      - name: Verify PATH & Outputs in Next Step
+        shell: pwsh
+        env:
+          OUT_VERSION: ${{ steps.setup.outputs.version }}
+          OUT_NIK_PATH: ${{ steps.setup.outputs.nik-path }}
+          OUT_NIKRUN_HOME: ${{ steps.setup.outputs.nikrun-home }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:OUT_VERSION)) { throw 'Missing version output.' }
+          if (-not (Test-Path -LiteralPath $env:OUT_NIK_PATH)) { throw "nik-path does not exist: $env:OUT_NIK_PATH" }
+          if (-not (Test-Path -LiteralPath $env:OUT_NIKRUN_HOME)) { throw "nikrun-home does not exist: $env:OUT_NIKRUN_HOME" }
+
+          $ver = (nik --no-color --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'nik --version failed from PATH.' }
+          Write-Host "nik from PATH -> $ver"
+          if (-not $ver.Contains($env:OUT_VERSION)) {
+            throw "Expected '$ver' to contain '$($env:OUT_VERSION)'."
+          }
+
+      - name: Setup Nikrun CLI (Custom NIKRUN_HOME & Pinned Version)
+        id: setup-custom
+        uses: ./
+        with:
+          version: '0.1.0'
+          nikrun-home: '${{ runner.temp }}/custom-nikrun'
+
+      - name: Verify Custom NIKRUN_HOME Propagation
+        shell: pwsh
+        env:
+          EXPECTED_HOME: ${{ steps.setup-custom.outputs.nikrun-home }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:NIKRUN_HOME -ne $env:EXPECTED_HOME) {
+            throw "NIKRUN_HOME env ('$env:NIKRUN_HOME') did not match output ('$env:EXPECTED_HOME')."
+          }
+          $ver = (nik --no-color --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or -not $ver.Contains('v0.1.0')) {
+            throw "Unexpected pinned version output: $ver"
+          }
+          Write-Host "Pinned install verified -> $ver (NIKRUN_HOME=$env:NIKRUN_HOME)"

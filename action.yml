@@ -1,0 +1,223 @@
+name: 'Setup Nikrun CLI (nik)'
+author: 'Nikrun'
+description: 'Install the standalone Nikrun CLI (nik) for Free Pascal & Object Pascal into user scope and add it to PATH.'
+
+branding:
+  icon: 'terminal'
+  color: 'blue'
+
+inputs:
+  channel:
+    description: 'Release channel to install ("stable" or "insider").'
+    required: false
+    default: 'stable'
+  version:
+    description: 'Specific nik CLI version or release tag to install (e.g. "0.1.0" or "v0.1.0"). Leave empty for the latest release in the selected channel.'
+    required: false
+    default: ''
+  nikrun-home:
+    description: 'Optional custom NIKRUN_HOME root directory (defaults to ~/.nikrun). When set, NIKRUN_HOME is also exported to subsequent workflow steps.'
+    required: false
+    default: ''
+  github-token:
+    description: 'GitHub token used when querying nikrun/cli releases to avoid unauthenticated API rate limits.'
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  version:
+    description: 'Resolved nik CLI version tag reported by nik --version.'
+    value: ${{ steps.setup-unix.outputs.version || steps.setup-win.outputs.version }}
+  nik-path:
+    description: 'Absolute path to the installed nik executable.'
+    value: ${{ steps.setup-unix.outputs.nik-path || steps.setup-win.outputs.nik-path }}
+  nikrun-home:
+    description: 'Resolved NIKRUN_HOME directory.'
+    value: ${{ steps.setup-unix.outputs.nikrun-home || steps.setup-win.outputs.nikrun-home }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install Nikrun CLI (Linux & macOS)
+      id: setup-unix
+      if: runner.os != 'Windows'
+      shell: bash
+      env:
+        INPUT_CHANNEL: ${{ inputs.channel }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_NIKRUN_HOME: ${{ inputs.nikrun-home }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+
+        CHANNEL="$(printf '%s' "${INPUT_CHANNEL:-}" | tr -d ' \t\r\n')"
+        if [ -z "$CHANNEL" ]; then
+          CHANNEL="stable"
+        fi
+        if [ "$CHANNEL" != "stable" ] && [ "$CHANNEL" != "insider" ]; then
+          echo "::error::Invalid channel '$CHANNEL' (expected 'stable' or 'insider')."
+          exit 1
+        fi
+
+        VERSION="$(printf '%s' "${INPUT_VERSION:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+        RAW_HOME="$(printf '%s' "${INPUT_NIKRUN_HOME:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+
+        if [ -n "$RAW_HOME" ]; then
+          case "$RAW_HOME" in
+            "~") RAW_HOME="$HOME" ;;
+            "~/"*) RAW_HOME="$HOME/${RAW_HOME#~/}" ;;
+          esac
+          mkdir -p "$RAW_HOME"
+          NIKRUN_HOME_DIR="$(cd "$RAW_HOME" && pwd)"
+          export NIKRUN_HOME="$NIKRUN_HOME_DIR"
+          echo "NIKRUN_HOME=$NIKRUN_HOME_DIR" >> "$GITHUB_ENV"
+        elif [ -n "${NIKRUN_HOME:-}" ]; then
+          mkdir -p "$NIKRUN_HOME"
+          NIKRUN_HOME_DIR="$(cd "$NIKRUN_HOME" && pwd)"
+        else
+          NIKRUN_HOME_DIR="$HOME/.nikrun"
+        fi
+
+        export NIKRUN_CHANNEL="$CHANNEL"
+        export NIKRUN_VERSION="$VERSION"
+        export NIKRUN_NO_MODIFY_PATH=1
+
+        TMP_DIR="$(mktemp -d)"
+        trap 'rm -rf "$TMP_DIR"' EXIT
+        TMP_SCRIPT="$TMP_DIR/install.sh"
+
+        PRIMARY_URL="https://nikrun.dev/install.sh"
+        FALLBACK_URL="https://raw.githubusercontent.com/nikrun/web/main/src/public/install.sh"
+
+        if command -v curl >/dev/null 2>&1; then
+          if ! curl -fsSL "$PRIMARY_URL" -o "$TMP_SCRIPT" 2>/dev/null; then
+            curl -fsSL "$FALLBACK_URL" -o "$TMP_SCRIPT"
+          fi
+        elif command -v wget >/dev/null 2>&1; then
+          if ! wget -qO "$TMP_SCRIPT" "$PRIMARY_URL" 2>/dev/null; then
+            wget -qO "$TMP_SCRIPT" "$FALLBACK_URL"
+          fi
+        else
+          echo "::error::Either 'curl' or 'wget' is required to download install.sh."
+          exit 1
+        fi
+
+        bash "$TMP_SCRIPT" --no-modify-path
+
+        INSTALL_DIR="$NIKRUN_HOME_DIR/bin"
+        NIK_BIN="$INSTALL_DIR/nik"
+        if [ ! -x "$NIK_BIN" ]; then
+          echo "::error::Expected nik binary was not found at '$NIK_BIN'."
+          exit 1
+        fi
+
+        echo "$INSTALL_DIR" >> "$GITHUB_PATH"
+
+        VER_LINE="$("$NIK_BIN" --no-color --version)"
+        RESOLVED_VERSION="$(printf '%s' "$VER_LINE" | awk '{print $2}')"
+        echo "Verified: $VER_LINE"
+
+        {
+          echo "version=$RESOLVED_VERSION"
+          echo "nik-path=$NIK_BIN"
+          echo "nikrun-home=$NIKRUN_HOME_DIR"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Install Nikrun CLI (Windows)
+      id: setup-win
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        INPUT_CHANNEL: ${{ inputs.channel }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_NIKRUN_HOME: ${{ inputs.nikrun-home }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        Set-StrictMode -Version Latest
+
+        try {
+          [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        } catch {}
+
+        $Channel = if ($env:INPUT_CHANNEL) { $env:INPUT_CHANNEL.Trim() } else { '' }
+        if ([string]::IsNullOrWhiteSpace($Channel)) {
+          $Channel = 'stable'
+        }
+        if ($Channel -ne 'stable' -and $Channel -ne 'insider') {
+          Write-Host "::error::Invalid channel '$Channel' (expected 'stable' or 'insider')."
+          exit 1
+        }
+
+        $Version = if ($env:INPUT_VERSION) { $env:INPUT_VERSION.Trim() } else { '' }
+        $RawHome = if ($env:INPUT_NIKRUN_HOME) { $env:INPUT_NIKRUN_HOME.Trim() } else { '' }
+        $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
+
+        if (-not [string]::IsNullOrWhiteSpace($RawHome)) {
+          if ($RawHome -eq '~') {
+            $RawHome = $UserHome
+          } elseif ($RawHome.StartsWith('~/') -or $RawHome.StartsWith('~\')) {
+            $RawHome = Join-Path $UserHome $RawHome.Substring(2)
+          }
+          $NikrunHomeDir = [System.IO.Path]::GetFullPath($RawHome)
+          New-Item -ItemType Directory -Force -Path $NikrunHomeDir | Out-Null
+          $env:NIKRUN_HOME = $NikrunHomeDir
+          [System.IO.File]::AppendAllText($env:GITHUB_ENV, "NIKRUN_HOME=$NikrunHomeDir`n", [System.Text.UTF8Encoding]::new($false))
+        } elseif (-not [string]::IsNullOrWhiteSpace($env:NIKRUN_HOME)) {
+          $NikrunHomeDir = [System.IO.Path]::GetFullPath($env:NIKRUN_HOME.Trim())
+          New-Item -ItemType Directory -Force -Path $NikrunHomeDir | Out-Null
+        } else {
+          $NikrunHomeDir = Join-Path $UserHome '.nikrun'
+        }
+
+        $env:NIKRUN_CHANNEL = $Channel
+        $env:NIKRUN_VERSION = $Version
+        $env:NIKRUN_NO_MODIFY_PATH = '1'
+
+        $TmpDir = Join-Path ([System.IO.Path]::GetTempPath()) ('nikrun-setup-action-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $TmpDir | Out-Null
+        try {
+          $TmpScript = Join-Path $TmpDir 'install.ps1'
+          $PrimaryUrl = 'https://nikrun.dev/install.ps1'
+          $FallbackUrl = 'https://raw.githubusercontent.com/nikrun/web/main/src/public/install.ps1'
+
+          try {
+            Invoke-WebRequest -Uri $PrimaryUrl -OutFile $TmpScript -UseBasicParsing
+          } catch {
+            Invoke-WebRequest -Uri $FallbackUrl -OutFile $TmpScript -UseBasicParsing
+          }
+
+          $global:LASTEXITCODE = 0
+          & $TmpScript
+          if ($LASTEXITCODE -ne 0) {
+            throw "install.ps1 exited with code $LASTEXITCODE."
+          }
+        } finally {
+          Remove-Item -LiteralPath $TmpDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        $InstallDir = Join-Path $NikrunHomeDir 'bin'
+        $NikBin = Join-Path $InstallDir 'nik.exe'
+        if (-not (Test-Path -LiteralPath $NikBin)) {
+          Write-Host "::error::Expected nik.exe binary was not found at '$NikBin'."
+          exit 1
+        }
+
+        [System.IO.File]::AppendAllText($env:GITHUB_PATH, "$InstallDir`n", [System.Text.UTF8Encoding]::new($false))
+
+        $global:LASTEXITCODE = 0
+        $VerLine = ((& $NikBin --no-color --version) | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($VerLine)) {
+          throw "Failed to verify installed nik binary via 'nik --version'."
+        }
+
+        $Parts = @($VerLine -split '\s+')
+        $ResolvedVersion = if ($Parts.Count -ge 2) { $Parts[1] } else { $VerLine }
+        Write-Host "Verified: $VerLine"
+
+        $OutLines = @(
+          "version=$ResolvedVersion"
+          "nik-path=$NikBin"
+          "nikrun-home=$NikrunHomeDir"
+        ) -join "`n"
+        [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "$OutLines`n", [System.Text.UTF8Encoding]::new($false))
