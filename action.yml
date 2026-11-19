@@ -80,7 +80,7 @@ runs:
 
         export NIKRUN_CHANNEL="$CHANNEL"
         export NIKRUN_VERSION="$VERSION"
-        export NIKRUN_NO_MODIFY_PATH=1
+        export NIKRUN_BIN_ONLY=1
 
         TMP_DIR="$(mktemp -d)"
         trap 'rm -rf "$TMP_DIR"' EXIT
@@ -102,7 +102,7 @@ runs:
           exit 1
         fi
 
-        bash "$TMP_SCRIPT" --no-modify-path
+        bash "$TMP_SCRIPT" --bin-only
 
         INSTALL_DIR="$NIKRUN_HOME_DIR/bin"
         NIK_BIN="$INSTALL_DIR/nik"
@@ -172,7 +172,7 @@ runs:
 
         $env:NIKRUN_CHANNEL = $Channel
         $env:NIKRUN_VERSION = $Version
-        $env:NIKRUN_NO_MODIFY_PATH = '1'
+        $env:NIKRUN_BIN_ONLY = '1'
 
         $TmpDir = Join-Path ([System.IO.Path]::GetTempPath()) ('nikrun-setup-action-' + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Force -Path $TmpDir | Out-Null
@@ -188,7 +188,7 @@ runs:
           }
 
           $global:LASTEXITCODE = 0
-          & $TmpScript
+          & $TmpScript -BinOnly
           if ($LASTEXITCODE -ne 0) {
             throw "install.ps1 exited with code $LASTEXITCODE."
           }
